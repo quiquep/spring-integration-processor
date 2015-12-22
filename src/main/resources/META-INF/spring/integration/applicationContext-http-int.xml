@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans
+ http://www.springframework.org/schema/beans/spring-beans.xsd http://www.springframework.org/schema/context 
+ http://www.springframework.org/schema/context/spring-context.xsd http://www.springframework.org/schema/integration 
+ http://www.springframework.org/schema/integration/spring-integration.xsd http://www.springframework.org/schema/integration/ws 
+ http://www.springframework.org/schema/integration/ws/spring-integration-ws-4.1.xsd 
+ http://www.springframework.org/schema/integration/http http://www.springframework.org/schema/integration/http/spring-integration-http-4.1.xsd
+ http://www.springframework.org/schema/integration/stream http://www.springframework.org/schema/integration/stream/spring-integration-stream.xsd
+ http://www.springframework.org/schema/integration/jdbc http://www.springframework.org/schema/integration/jdbc/spring-integration-jdbc.xsd
+ http://www.springframework.org/schema/jdbc http://www.springframework.org/schema/jdbc/spring-jdbc.xsd"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ws="http://www.springframework.org/schema/integration/ws"
+	xmlns:int="http://www.springframework.org/schema/integration" xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:int-http="http://www.springframework.org/schema/integration/http"
+	xmlns:int-stream="http://www.springframework.org/schema/integration/stream"
+	xmlns:int-jdbc="http://www.springframework.org/schema/integration/jdbc"
+	xmlns:jdbc="http://www.springframework.org/schema/jdbc">
+
+	<int:annotation-config/>
+
+    <!-- INPUT CHANNEL - SMS REQUEST -->   
+    <int:channel id="smsRequestChannel">
+        <!--  int:queue message-store="messageStore"/-->    
+    	<int:interceptors>
+        	<int:wire-tap channel="loggingRequestChannel"/>
+    	</int:interceptors>
+    </int:channel>
+
+    <int:logging-channel-adapter id="loggingRequestChannel" level="INFO" expression="'Received request on Request Channel with ' + headers"/>
+    
+	<!-- HTTP INBOUND GATEWAY -->
+	<int-http:inbound-gateway
+		request-channel="smsRequestChannel"
+		supported-methods="GET"
+		path="/process/{smstext}"
+		payload-expression="#pathVariables.smstext"
+		/>
+	
+	<int:header-enricher input-channel="smsRequestChannel" output-channel="smsInputRequestChannel">
+	    <int:header name="MSGID" ref="smsProcessorService" method="getHeaderMessageId" />
+	</int:header-enricher>    
+	
+	<int:service-activator id="smsCommandActivator"
+					input-channel="smsInputRequestChannel"
+					output-channel="commandsChannelEnricher"
+					ref="smsProcessorService"
+					method="getCommandMsg" >
+	</int:service-activator>
+
+	<int:header-enricher input-channel="commandsChannelEnricher" output-channel="commandsChannel">
+	     <int:header name="param1" ref="smsProcessorService" method="getFirstParam" />
+	     <int:header name="param2" ref="smsProcessorService" method="getSecondParam" />
+	</int:header-enricher>
+	
+    <!-- COMMAND EXECUTOR CHANNEL -->
+    <int:channel id="commandsChannel">
+    	<int:interceptors>
+        	<int:wire-tap channel="loggingCommandsChannel"/>
+    	</int:interceptors>
+    </int:channel>
+    
+    <int:logging-channel-adapter id="loggingCommandsChannel" level="INFO" expression="'Received message on Commands Channel with ' + headers"/>
+    
+    <!-- SMS TEXT ACTION BASED ROUTER -->
+    <int:recipient-list-router input-channel="commandsChannel">
+	    <int:recipient channel="addProductChannel"
+	        selector-expression="payload.action.equals('ALTA')" />
+	    <int:recipient channel="removeProductChannel"
+	        selector-expression="payload.action.equals('BAJA')" />
+	    <int:recipient channel="chargeCreditChannel"
+	        selector-expression="payload.action.equals('CARGA')" />	    
+    </int:recipient-list-router>
+    
+    <int:channel id="addProductChannel">
+    	<int:interceptors>
+        	<int:wire-tap channel="loggingAddProductChannel"/>
+    	</int:interceptors>
+    </int:channel>
+    
+    <int:logging-channel-adapter id="loggingAddProductChannel" level="INFO" expression="'Received message on Add Product Channel with ' + headers"/>
+        
+	<int:service-activator id="smsProcessorActivator"
+					input-channel="addProductChannel"
+					output-channel="customerChannel"
+					ref="smsProcessorService"
+					method="getCustomerRequestCommandMsg"
+					/>
+
+ 	<!-- CUSTOMER CHANNEL -->
+    <int:channel id="customerChannel">    
+    	<int:interceptors>
+        	<int:wire-tap channel="loggingCustomerChannel"/>
+    	</int:interceptors>
+    </int:channel>
+    
+    <int:logging-channel-adapter id="loggingCustomerChannel" level="INFO" expression="'Received message on Customer Channel with ' + headers"/>
+    
+    <!-- SOAP WS OUTBOUND GATEWAY -->	 
+	<ws:outbound-gateway id="customerGateway"
+	    request-channel="customerChannel"
+	    uri="http://localhost:8081/cliente-entidad-ws"
+	    marshaller="customerMarshaller" reply-channel="smsResponseChannel"
+	     />
+	
+
+	<!-- 'BAJA ADULT 25888999' CHANNEL -->
+    <int:channel id="removeProductChannel">
+    	<int:interceptors>
+        	<int:wire-tap channel="loggingRemoveProductChannel"/>
+    	</int:interceptors>
+    </int:channel>
+    
+    <int:logging-channel-adapter id="loggingRemoveProductChannel" level="INFO" expression="'Received message on Remove Product Channel with ' + headers"/>
+    
+    <!-- 'CARGA 50 25888999' CHANNEL -->
+    <int:channel id="chargeCreditChannel">
+    	<int:interceptors>
+        	<int:wire-tap channel="loggingChargeCreditChannel"/>
+    	</int:interceptors>
+    </int:channel>
+    
+    <int:logging-channel-adapter id="loggingChargeCreditChannel" level="INFO" expression="'Received message on Charge Credit Channel with ' + headers"/>  
+    
+    <!-- OUTPUT CHANNEL -->
+	<int:channel id="smsResponseChannel">
+	    <int:interceptors>
+        	<int:wire-tap channel="loggingResponseChannel"/>
+    	</int:interceptors>
+	</int:channel>
+    
+    <int:logging-channel-adapter id="loggingResponseChannel" level="INFO" expression="'Received message on SMS Response Channel with ' + headers"/>
+    
+	<int:service-activator id="smsProcessorResponseActivator"
+					input-channel="smsResponseChannel"
+					ref="smsProcessorService"
+					method="trackFinishedProcess"
+					/>    
+
+    <!-- MESSAGE PERSISTENCE -->
+    <!--  int-jdbc:message-store id="messageStore" data-source="dataSource" / -->
+    
+	<!-- bean id="dataSource"
+		class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+ 
+		<property name="driverClassName" value="com.mysql.jdbc.Driver" />
+		<property name="url" value="jdbc:mysql://localhost:3306/messages" />
+		<property name="username" value="root" />
+		<property name="password" value="" />
+	</bean -->
+	
+	<!-- bean id="transactionManager" class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
+		<property name="dataSource" ref="dataSource" />
+	</bean -->	    
+    
+	<!-- in-memory database -->
+	<jdbc:embedded-database id="dataSource">
+		<jdbc:script location="classpath:schema.sql" />
+	</jdbc:embedded-database> 
+        
+    <!-- ERROR CHANNEL -->
+    <int-stream:stderr-channel-adapter channel="errorChannel" append-newline="true"/>
+    
+</beans>
